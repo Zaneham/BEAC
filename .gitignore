@@ -1,0 +1,23 @@
+# Build outputs
+beac
+beac.exe
+test_beac
+test_beac.exe
+*.o
+*.obj
+*.hsaco
+*.elf
+
+# Working notes, not shipped
+plan.txt
+
+# Extracted manual text (derived from the source PDFs; get those from
+# bitsavers rather than redistributing them here)
+refs/
+
+# Editor / OS noise
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
