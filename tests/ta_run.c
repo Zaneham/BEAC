@@ -58,6 +58,7 @@ static int64_t run_fn(const char *src, const char *fname)
     for (i = 0; i < rM.n_funcs; i++)
         if (strcmp(rM.strs + rM.funcs[i].name, fname) == 0) { fi = i; found = 1; break; }
     if (!found) return -100005;
+    (void)fi;   /* read only on the Windows JIT path below */
 
 #ifdef _WIN32
     {
@@ -104,6 +105,7 @@ static double run_real(const char *src, const char *fname)
     for (i = 0; i < rM.n_funcs; i++)
         if (strcmp(rM.strs + rM.funcs[i].name, fname) == 0) { fi = i; found = 1; break; }
     if (!found) return -1e18;
+    (void)fi;   /* read only on the Windows JIT path below */
 #ifdef _WIN32
     {
         uint32_t len = rx86.codelen, off = rx86.fn_off[fi];
