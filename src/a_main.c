@@ -36,7 +36,9 @@ static sema_ctx_t  g_js;
 static a_typemap_t g_tm;
 static jir_mod_t   g_jir;
 static x86_mod_t   g_x86;
+#ifdef _WIN32
 static int64_t     g_globals[1 << 16];   /* program globals + display + AR stack */
+#endif
 
 static int read_file(const char *path, char *buf, size_t max)
 {
@@ -173,7 +175,8 @@ int main(int argc, char **argv)
         printf("%lld\n", (long long)r);
         return 0;
 #else
-        fprintf(stderr, "beac: --run needs Windows (JIT via VirtualAlloc)\n");
+        fprintf(stderr, "beac: --run %s needs Windows (JIT via VirtualAlloc)\n",
+                runproc ? runproc : "main");
         return 1;
 #endif
     }

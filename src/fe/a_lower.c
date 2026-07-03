@@ -796,9 +796,9 @@ static void low_for_elem(a_lower_t *L, uint32_t elem, uint32_t addr,
     uint32_t st;
 
     if (ND(L, elem)->kind == AN_FOR_ELEM) {
+        uint32_t ev = low_expr(L, ND(L, elem)->first_child);   /* value first */
         st = emit(L, JIR_STORE, 0, 2, 0);
-        setop(L, st, 0, low_expr(L, ND(L, elem)->first_child));
-        setop(L, st, 1, addr);
+        setop(L, st, 0, ev); setop(L, st, 1, addr);
         low_node(L, body);
         return;
     }
@@ -810,8 +810,11 @@ static void low_for_elem(a_lower_t *L, uint32_t elem, uint32_t addr,
         uint32_t cont = new_blk(L, "for.cont"), cmp, bc;
         if (!blk_term(L)) br_to(L, hdr);
         set_blk(L, hdr);
-        st = emit(L, JIR_STORE, 0, 2, 0);
-        setop(L, st, 0, low_expr(L, val)); setop(L, st, 1, addr);
+        {
+            uint32_t ev = low_expr(L, val);            /* value before the store */
+            st = emit(L, JIR_STORE, 0, 2, 0);
+            setop(L, st, 0, ev); setop(L, st, 1, addr);
+        }
         cmp = low_expr(L, cond);
         bc = emit(L, JIR_BR_COND, 0, 3, 0);
         setop(L, bc, 0, cmp); setop(L, bc, 1, bod); setop(L, bc, 2, cont);
@@ -833,8 +836,11 @@ static void low_for_elem(a_lower_t *L, uint32_t elem, uint32_t addr,
         uint32_t stp = new_blk(L, "for.step"), cont = new_blk(L, "for.cont");
         uint32_t cmp, bc;
 
-        st = emit(L, JIR_STORE, 0, 2, 0);
-        setop(L, st, 0, low_expr(L, init)); setop(L, st, 1, addr);
+        {
+            uint32_t iv = low_expr(L, init);           /* value before the store */
+            st = emit(L, JIR_STORE, 0, 2, 0);
+            setop(L, st, 0, iv); setop(L, st, 1, addr);
+        }
         if (!blk_term(L)) br_to(L, hdr);
 
         set_blk(L, hdr);
