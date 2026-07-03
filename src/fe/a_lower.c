@@ -13,10 +13,10 @@
  * that makes non-local access work under recursion).
  *
  * Covered: blocks, type decls, assignment (incl. chained), arithmetic /
- * relational / logical expressions, IF, FOR (STEP..UNTIL and single-value),
- * GO TO / labels, 1-D arrays, procedures and calls, recursion, REAL return,
- * and nested non-local access. Not yet: the FOR WHILE form and negative
- * STEP, multi-dimensional arrays, call-by-name / formal procedures. */
+ * relational / logical expressions, IF, FOR (all four for-list element forms,
+ * either step sign, multi-element lists), GO TO / labels, 1-D arrays,
+ * procedures and calls, recursion, REAL return, and nested non-local access.
+ * Not yet: multi-dimensional arrays, call-by-name / formal procedures. */
 
 #include "a_lower.h"
 #include <string.h>
@@ -769,72 +769,129 @@ static void low_if(a_lower_t *L, uint32_t node)
     set_blk(L, end_b);
 }
 
-/* FOR v := <element> DO body. First list element only for now:
- *   STEP..UNTIL  -> a counting loop (positive step assumed)
- *   single value -> body runs once with v := value
- * The limit and step are re-evaluated each iteration, per Section 8. */
+/* One for-list element (Section 8). Lowers the element in place, running the
+ * shared body once per value it produces, and leaves cur_blk on a fresh
+ * continuation block so the next element (or the code after the FOR) picks up
+ * from there. The controlled variable's type picks the arithmetic: isf selects
+ * the float ops, so a REAL loop counter counts in REAL.
+ *
+ *   bare value  -> v := e; body once
+ *   STEP UNTIL  -> counting loop, either step sign. The continuation test is
+ *                  (v - limit) * step <= 0, which is the manual's
+ *                  (v - limit) * sign(step) <= 0 scaled by |step|, so it works
+ *                  for a negative or a runtime-signed step without a branch.
+ *   STEP WHILE  -> same increment, but a Boolean guard replaces the limit test.
+ *   plain WHILE -> v := e re-evaluated each turn, run while the guard holds.
+ * The step and limit are re-evaluated per iteration, per Section 8 (a step with
+ * side effects is thus evaluated twice a turn, in the test and the increment;
+ * the manual's own definition references it in both places). */
+static void low_for_elem(a_lower_t *L, uint32_t elem, uint32_t addr,
+                         uint32_t vjty, int isf, uint32_t body)
+{
+    uint32_t bjty = a_jtype_of(L->tm, AT_BOOLEAN);
+    int subop = isf ? JIR_FSUB : JIR_SUB;
+    int mulop = isf ? JIR_FMUL : JIR_MUL;
+    int addop = isf ? JIR_FADD : JIR_ADD;
+    int cmpop = isf ? JIR_FCMP : JIR_ICMP;
+    uint32_t st;
+
+    if (ND(L, elem)->kind == AN_FOR_ELEM) {
+        st = emit(L, JIR_STORE, 0, 2, 0);
+        setop(L, st, 0, low_expr(L, ND(L, elem)->first_child));
+        setop(L, st, 1, addr);
+        low_node(L, body);
+        return;
+    }
+
+    if (ND(L, elem)->kind == AN_FOR_WHILE) {
+        uint32_t val  = ND(L, elem)->first_child;
+        uint32_t cond = ND(L, val)->next_sibling;
+        uint32_t hdr = new_blk(L, "for.hdr"), bod = new_blk(L, "for.body");
+        uint32_t cont = new_blk(L, "for.cont"), cmp, bc;
+        if (!blk_term(L)) br_to(L, hdr);
+        set_blk(L, hdr);
+        st = emit(L, JIR_STORE, 0, 2, 0);
+        setop(L, st, 0, low_expr(L, val)); setop(L, st, 1, addr);
+        cmp = low_expr(L, cond);
+        bc = emit(L, JIR_BR_COND, 0, 3, 0);
+        setop(L, bc, 0, cmp); setop(L, bc, 1, bod); setop(L, bc, 2, cont);
+        set_blk(L, bod);
+        low_node(L, body);
+        if (!blk_term(L)) br_to(L, hdr);
+        set_blk(L, cont);
+        return;
+    }
+
+    /* AN_FOR_STEP: child0 = init, child1 = step, child2 = limit-or-guard.
+     * aux 0 = STEP..UNTIL (arithmetic limit), aux 1 = STEP..WHILE (Boolean). */
+    {
+        uint32_t init  = ND(L, elem)->first_child;
+        uint32_t step  = ND(L, init)->next_sibling;
+        uint32_t third = ND(L, step)->next_sibling;
+        int is_while   = (ND(L, elem)->aux == 1);
+        uint32_t hdr = new_blk(L, "for.hdr"), bod = new_blk(L, "for.body");
+        uint32_t stp = new_blk(L, "for.step"), cont = new_blk(L, "for.cont");
+        uint32_t cmp, bc;
+
+        st = emit(L, JIR_STORE, 0, 2, 0);
+        setop(L, st, 0, low_expr(L, init)); setop(L, st, 1, addr);
+        if (!blk_term(L)) br_to(L, hdr);
+
+        set_blk(L, hdr);
+        if (is_while) {
+            cmp = low_expr(L, third);              /* continue while guard */
+        } else {
+            uint32_t v = emit(L, JIR_LOAD, vjty, 1, 0); setop(L, v, 0, addr);
+            uint32_t lv = low_expr(L, third);      /* limit */
+            uint32_t sv = low_expr(L, step);
+            uint32_t diff = emit(L, subop, vjty, 2, 0);
+            uint32_t prod;
+            setop(L, diff, 0, v); setop(L, diff, 1, lv);
+            prod = emit(L, mulop, vjty, 2, 0);
+            setop(L, prod, 0, diff); setop(L, prod, 1, sv);
+            cmp = emit(L, cmpop, bjty, 2, JP_LE);  /* (v-limit)*step <= 0 */
+            setop(L, cmp, 0, prod);
+            setop(L, cmp, 1, isf ? mk_cf(L, 0.0) : mk_ci(L, 0));
+        }
+        bc = emit(L, JIR_BR_COND, 0, 3, 0);
+        setop(L, bc, 0, cmp); setop(L, bc, 1, bod); setop(L, bc, 2, cont);
+
+        set_blk(L, bod);
+        low_node(L, body);
+        if (!blk_term(L)) br_to(L, stp);
+
+        set_blk(L, stp);
+        {
+            uint32_t v = emit(L, JIR_LOAD, vjty, 1, 0); setop(L, v, 0, addr);
+            uint32_t sv = low_expr(L, step);
+            uint32_t add = emit(L, addop, vjty, 2, 0);
+            setop(L, add, 0, v); setop(L, add, 1, sv);
+            st = emit(L, JIR_STORE, 0, 2, 0);
+            setop(L, st, 0, add); setop(L, st, 1, addr);
+        }
+        br_to(L, hdr);
+        set_blk(L, cont);
+    }
+}
+
+/* FOR v := <for-list> DO body. The for-list is every element between the
+ * controlled variable and the body (last child); they run left to right,
+ * sharing the one body, per Section 8. */
 static void low_for(a_lower_t *L, uint32_t node)
 {
     uint32_t var = ND(L, node)->first_child;
-    uint32_t elem = ND(L, var)->next_sibling;
     uint32_t body = 0, c, addr, vjty;
-    int li;
+    int li, isf;
     char buf[AL_IDENT];
 
     for (c = ND(L, node)->first_child; c; c = ND(L, c)->next_sibling) body = c;
     addr = low_lhs(L, var);
     li = find_loc(L, (ntext(L, ND(L, var)->tok, buf, (int)sizeof(buf)), buf));
     vjty = (li >= 0) ? L->loc[li].jty : a_jtype_of(L->tm, AT_INTEGER);
-    if (!elem) return;
+    isf = (L->Sem->ntype[var] == AT_REAL);
 
-    if (ND(L, elem)->kind == AN_FOR_ELEM) {
-        uint32_t v = low_expr(L, ND(L, elem)->first_child);
-        uint32_t st = emit(L, JIR_STORE, 0, 2, 0);
-        setop(L, st, 0, v); setop(L, st, 1, addr);
-        low_node(L, body);
-        return;
-    }
-
-    if (ND(L, elem)->kind == AN_FOR_STEP) {
-        uint32_t init  = ND(L, elem)->first_child;
-        uint32_t step  = ND(L, init)->next_sibling;
-        uint32_t limit = ND(L, step)->next_sibling;
-        uint32_t hdr, bod, stp, ext, st, cmp, bc;
-        uint32_t bjty = a_jtype_of(L->tm, AT_BOOLEAN);
-
-        st = emit(L, JIR_STORE, 0, 2, 0);          /* v := init */
-        setop(L, st, 0, low_expr(L, init)); setop(L, st, 1, addr);
-
-        hdr = new_blk(L, "for.hdr"); bod = new_blk(L, "for.body");
-        stp = new_blk(L, "for.step"); ext = new_blk(L, "for.exit");
-        if (!blk_term(L)) br_to(L, hdr);
-
-        set_blk(L, hdr);                            /* while v <= limit */
-        {
-            uint32_t v = emit(L, JIR_LOAD, vjty, 1, 0); setop(L, v, 0, addr);
-            uint32_t lv = low_expr(L, limit);
-            cmp = emit(L, JIR_ICMP, bjty, 2, JP_LE);
-            setop(L, cmp, 0, v); setop(L, cmp, 1, lv);
-        }
-        bc = emit(L, JIR_BR_COND, 0, 3, 0);
-        setop(L, bc, 0, cmp); setop(L, bc, 1, bod); setop(L, bc, 2, ext);
-
-        set_blk(L, bod);
-        low_node(L, body);
-        if (!blk_term(L)) br_to(L, stp);
-
-        set_blk(L, stp);                            /* v := v + step */
-        {
-            uint32_t v = emit(L, JIR_LOAD, vjty, 1, 0); setop(L, v, 0, addr);
-            uint32_t sv = low_expr(L, step);
-            uint32_t add = emit(L, JIR_ADD, vjty, 2, 0);
-            setop(L, add, 0, v); setop(L, add, 1, sv);
-            st = emit(L, JIR_STORE, 0, 2, 0);
-            setop(L, st, 0, add); setop(L, st, 1, addr);
-        }
-        br_to(L, hdr);
-        set_blk(L, ext);
-    }
+    for (c = ND(L, var)->next_sibling; c && c != body; c = ND(L, c)->next_sibling)
+        low_for_elem(L, c, addr, vjty, isf, body);
 }
 
 static void low_goto(a_lower_t *L, uint32_t node)

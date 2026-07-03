@@ -228,6 +228,69 @@ static void arun_for_sum(void)
 }
 TH_REG("arun", arun_for_sum)
 
+static void arun_for_negstep(void)
+{
+#ifndef _WIN32
+    SKIP("JIT requires Windows");
+#else
+    /* negative STEP counts down: sum 10 downto 1 = 55 */
+    CHECK(run_fn("BEGIN INTEGER PROCEDURE S; "
+                 "BEGIN INTEGER I; S := 0; "
+                 "FOR I := 10 STEP -1 UNTIL 1 DO S := S + I END; S END",
+                 "S") == 55);
+    PASS();
+#endif
+}
+TH_REG("arun", arun_for_negstep)
+
+static void arun_for_while(void)
+{
+#ifndef _WIN32
+    SKIP("JIT requires Windows");
+#else
+    /* plain WHILE element: E = I + 1 re-evaluated each turn, guard I <= 5.
+     * I walks 1,2,3,4,5 (then 6 fails the guard), so S = 1+2+3+4+5 = 15. */
+    CHECK(run_fn("BEGIN INTEGER PROCEDURE S; "
+                 "BEGIN INTEGER I; S := 0; I := 0; "
+                 "FOR I := I + 1 WHILE I <= 5 DO S := S + I END; S END",
+                 "S") == 15);
+    PASS();
+#endif
+}
+TH_REG("arun", arun_for_while)
+
+static void arun_for_step_while(void)
+{
+#ifndef _WIN32
+    SKIP("JIT requires Windows");
+#else
+    /* STEP..WHILE: I := 1, step +1, guard I <= 5. Body runs for 1..5,
+     * the increment to 6 fails the guard. S = 15. */
+    CHECK(run_fn("BEGIN INTEGER PROCEDURE S; "
+                 "BEGIN INTEGER I; S := 0; "
+                 "FOR I := 1 STEP 1 WHILE I <= 5 DO S := S + I END; S END",
+                 "S") == 15);
+    PASS();
+#endif
+}
+TH_REG("arun", arun_for_step_while)
+
+static void arun_for_multi(void)
+{
+#ifndef _WIN32
+    SKIP("JIT requires Windows");
+#else
+    /* multi-element for-list: bare values then a STEP element, one body.
+     * 1 + 3 + (10 STEP 5 UNTIL 20 -> 10+15+20) = 1+3+45 = 49 */
+    CHECK(run_fn("BEGIN INTEGER PROCEDURE S; "
+                 "BEGIN INTEGER I; S := 0; "
+                 "FOR I := 1, 3, 10 STEP 5 UNTIL 20 DO S := S + I END; S END",
+                 "S") == 49);
+    PASS();
+#endif
+}
+TH_REG("arun", arun_for_multi)
+
 static void arun_factorial(void)
 {
 #ifndef _WIN32

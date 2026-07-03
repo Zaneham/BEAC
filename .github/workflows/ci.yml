@@ -1,0 +1,39 @@
+name: Build & Test
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  # Linux builds the whole compiler and runs the suite. The JIT execution
+  # tests need VirtualAlloc, so they SKIP here; everything from the lexer
+  # through lowering and JIR still runs, which is most of the frontend.
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: make
+      - name: Test
+        run: make test
+
+  # Windows is the gate that matters: the run tests JIT the emitted x86-64
+  # into executable memory and call it, so this job actually proves the
+  # ALGOL programs execute and compute the right answers.
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          install: mingw-w64-x86_64-gcc make
+      - name: Build
+        run: make
+      - name: Test
+        run: make test
